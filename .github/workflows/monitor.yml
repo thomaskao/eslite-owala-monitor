@@ -2,9 +2,9 @@ name: Eslite Owala Stock Monitor
 
 on:
   schedule:
-    # 這裡使用 Cron 語法，設定每 15 分鐘自動執行一次 (UTC 時間)
+    # 每 15 分鐘自動執行一次
     - cron: '*/15 * * * *'
-  workflow_dispatch: # 允許在 GitHub 網頁上手動點擊「即時測試執行」
+  workflow_dispatch: # 允許在網頁上手動點擊執行
 
 jobs:
   check-stock:
@@ -12,10 +12,10 @@ jobs:
 
     steps:
     - name: 取得程式碼
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5  # 👈 這裡從 @v4 升級到 @v5，完美支援新版環境
 
     - name: 設定 Python 環境
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6 # 👈 這裡從 @v5 升級到 @v6，移除過時警告
       with:
         python-version: '3.10'
         cache: 'pip'
