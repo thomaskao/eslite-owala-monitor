@@ -6,7 +6,7 @@ from curl_cffi import requests as cffi_requests
 # 從環境變數讀取 Discord Webhook URL（安全性考量，不在程式碼內明碼暴露）
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 SEARCH_KEYWORD = "owala freesip tritan"
-
+SEARCH_KEYWORD = "blender"
 def send_discord_notification(available_products):
     if not DISCORD_WEBHOOK_URL:
         print("⚠️ 未設定 DISCORD_WEBHOOK_URL 環境變數，跳過推播。")
