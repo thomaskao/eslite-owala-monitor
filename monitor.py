@@ -1,15 +1,19 @@
 import os
 import time
 import requests
-from curl_cffi import requests as cffi_requests
+import undetected_chromedriver as uc
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
-# 從環境變數讀取 Discord Webhook URL（安全性考量，不在程式碼內明碼暴露）
+# 從 GitHub Secrets 讀取 Discord Webhook URL
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-SEARCH_KEYWORD = "owala freesip tritan"
-SEARCH_KEYWORD = "blender"
+TARGET_URL = "https://www.eslite.com/Search?keyword=owala+freesip+tritan&final_price=0,&publishDate=0&sort=_weight_+desc&size=20&display=list&start=0&exp=c"
+
 def send_discord_notification(available_products):
     if not DISCORD_WEBHOOK_URL:
-        print("⚠️ 未設定 DISCORD_WEBHOOK_URL 環境變數，跳過推播。")
+        print("⚠️ 未設定 DISCORD_WEBHOOK_URL，跳過推播。")
         return
 
     embeds = []
@@ -20,9 +24,9 @@ def send_discord_notification(available_products):
             "color": 5763719,
             "fields": [
                 {"name": "💰 價格", "value": f"${prod['price']}", "inline": True},
-                {"name": "🛒 庫存狀態", "value": prod['status'], "inline": True}
+                {"name": "🛒 按鈕狀態", "value": prod['status'], "inline": True}
             ],
-            "footer": {"text": "誠品 Cloudflare 突破監控系統 (GitHub Actions)"},
+            "footer": {"text": "誠品防偵測瀏覽器監控系統 (GitHub Actions)"},
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         })
 
@@ -38,75 +42,95 @@ def send_discord_notification(available_products):
         else:
             print(f"❌ Discord 通知發送失敗，狀態碼：{res.status_code}")
     except Exception as e:
-        print(f"❌ 發送 Discord Webhook 時發生連線錯誤：{e}")
+        print(f"❌ 發送 Discord Webhook 時發生錯誤：{e}")
+
+def create_driver():
+    print("🛠️ 正在初始化防偵測 Chrome 瀏覽器 (Undetected ChromeDriver)...")
+    options = uc.ChromeOptions()
+    options.add_argument("--headless=new")  # 在 GitHub 雲端後台以無頭模式執行
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--lang=zh-TW")
+    
+    # 啟動防偵測瀏覽器，它會自動處理 Cloudflare 的 JS 檢測與特徵抹除
+    driver = uc.Chrome(options=options)
+    return driver
 
 def check_eslite():
-    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 🌐 正在透過偽裝 TLS 指紋連線至誠品後端 API...")
-    timestamp = time.strftime("%Y%m%d%H%M%S", time.localtime())
-    api_url = f"https://athena.eslite.com/api/v2/search?q={SEARCH_KEYWORD}&final_price=0,&publishDate=0&sort=_weight_+desc&size=20&start=0&datetime={timestamp}"
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 🌐 正在使用防偵測瀏覽器進入誠品線上...")
+    driver = create_driver()
     
-    headers = {
-        "Referer": f"https://www.eslite.com/Search?keyword={SEARCH_KEYWORD}",
-        "Origin": "https://www.eslite.com",
-        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7"
-    }
-
     try:
-        # 使用 impersonate="chrome120" 來完美偽裝 Chrome 瀏覽器指紋，繞過 Cloudflare 403
-        response = cffi_requests.get(api_url, headers=headers, impersonate="chrome120", timeout=15)
+        driver.get(TARGET_URL)
         
-        if response.status_code == 403:
-            print("❌ 依然遇到 HTTP 403，Cloudflare 攔截了請求！")
-            return
-        elif response.status_code != 200:
-            print(f"❌ 連線失敗，狀態碼：{response.status_code}")
+        # 1. 等待 Vue.js 渲染商品卡片 (針對 Cloudflare 可能的驗證稍微延長等待時間)
+        print("⏳ 正在等待網頁與商品卡片載入 (同時通過 Cloudflare 背景檢測)...")
+        wait = WebDriverWait(driver, 20)
+        try:
+            wait.until(EC.presence_of_element_located((By.CLASS_NAME, "product-item")))
+        except TimeoutException:
+            print("⚠️ 警告：20 秒內未找到商品卡片。可能是關鍵字無結果，或 Cloudflare 正在要求進一步驗證。")
+            # 印出當前網頁標題以供除錯
+            print(f"📄 當前頁面標題：{driver.title}")
             return
 
-        data = response.json()
-        hits = data.get("hits", {}).get("hit", [])
-        
-        if not hits:
-            print("⚠️ 未抓取到任何商品資料，請檢查關鍵字。")
-            return
+        # 2. 模擬真人向下捲動網頁，觸發圖片與懶加載
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
+        time.sleep(1.5)
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(1.5)
 
-        print(f"📦 成功鎖定 {len(hits)} 款商品，開始分析庫存...")
+        # 3. 獲取頁面上所有的商品卡片
+        product_items = driver.find_elements(By.CLASS_NAME, "product-item")
+        print(f"📦 成功鎖定 {len(product_items)} 款商品，開始逐一分析庫存狀態...\n" + "-"*50)
+
         available_products = []
         out_of_stock_count = 0
 
-        for idx, prod in enumerate(hits, 1):
-            fields = prod.get("fields", {})
-            prod_name = fields.get("name", "未知商品")
-            prod_id = prod.get("id")
-            prod_url = fields.get("url", f"/product/{prod_id}")
-            if prod_url.startswith("/"):
-                prod_url = f"https://www.eslite.com{prod_url}"
-            prod_price = fields.get("final_price", fields.get("price", "未知"))
+        for index, item in enumerate(product_items, 1):
+            try:
+                name_elem = item.find_element(By.CLASS_NAME, "product-name")
+                prod_name = name_elem.text.strip()
+                
+                link_elem = item.find_element(By.CLASS_NAME, "item-image-link")
+                prod_url = link_elem.get_attribute("href")
 
-            is_available = False
-            status_text = "缺貨中 / 貨到通知"
+                try:
+                    price_elem = item.find_element(By.CLASS_NAME, "slider-price")
+                    prod_price = price_elem.text.strip()
+                except NoSuchElementException:
+                    prod_price = "未知"
 
-            # 判斷庫存
-            if fields.get("stock", 0) > 0:
-                is_available = True
-                status_text = f"有庫存 (剩餘 {fields['stock']} 件)"
-            elif fields.get("is_out_of_stock") is False or fields.get("can_buy") is True:
-                is_available = True
-                status_text = "開放訂購中"
+                # 核心檢查：當前卡片內部是否有「加入購物車」按鈕
+                try:
+                    buy_btn = item.find_element(By.CSS_SELECTOR, "button[data-gid='add-cart-button']")
+                    status_text = buy_btn.text.strip()
+                    print(f" 🟢 [{index:02d}] 【發現有貨！】 {prod_name} | 價格: ${prod_price}")
+                    available_products.append({
+                        "name": prod_name,
+                        "url": prod_url,
+                        "price": prod_price,
+                        "status": status_text
+                    })
+                except NoSuchElementException:
+                    out_of_stock_count += 1
+                    try:
+                        notice_btn = item.find_element(By.CSS_SELECTOR, "button[data-gid='notice-button']")
+                        status_text = notice_btn.text.strip()
+                    except NoSuchElementException:
+                        status_text = "暫無庫存/未開放"
+                    # 若想在終端機看到所有缺貨品項，可解除下一行的註解
+                    # print(f" 🔴 [{index:02d}] [缺貨中] {prod_name[:20]}... | 狀態: {status_text}")
+                    pass
 
-            if is_available:
-                print(f" 🟢 [{idx:02d}] 【發現有貨！】 {prod_name} | 價格: ${prod_price} | 狀態: {status_text}")
-                available_products.append({
-                    "name": prod_name,
-                    "url": prod_url,
-                    "price": str(prod_price),
-                    "status": status_text
-                })
-            else:
-                out_of_stock_count += 1
+            except Exception as e:
+                continue
 
         print("-" * 50)
         print(f"📊 巡邏完畢！🟢 可購買：{len(available_products)} 件 | 🔴 缺貨中：{out_of_stock_count} 件")
-
+        
         if available_products:
             print("🚀 正在觸發 Discord 警報...")
             send_discord_notification(available_products)
@@ -115,6 +139,10 @@ def check_eslite():
 
     except Exception as e:
         print(f"❌ 執行過程中發生異常：{e}")
+    finally:
+        # 確保安全關閉雲端瀏覽器，釋放記憶體
+        driver.quit()
+        print("👋 瀏覽器已安全釋放。")
 
 if __name__ == "__main__":
     check_eslite()
