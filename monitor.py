@@ -1,5 +1,6 @@
 import os
 import time
+import subprocess
 import requests
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
@@ -44,18 +45,37 @@ def send_discord_notification(available_products):
     except Exception as e:
         print(f"❌ 發送 Discord Webhook 時發生錯誤：{e}")
 
+def get_chrome_major_version():
+    """自動偵測 GitHub Actions 主機上的 Google Chrome 主版號"""
+    try:
+        # 透過系統指令查詢 Google Chrome 版本
+        output = subprocess.check_output(['google-chrome', '--version'], text=True)
+        # 輸出範例: "Google Chrome 149.0.7827.0 ..." -> 擷取 "149"
+        version_str = output.strip().split()[2]
+        major_version = int(version_str.split('.')[0])
+        print(f"ℹ️ 成功偵測到主機 Chrome 瀏覽器主版號為：{major_version}")
+        return major_version
+    except Exception as e:
+        print(f"⚠️ 無法自動偵測 Chrome 版本，將由套件自行決定：{e}")
+        return None
+
 def create_driver():
     print("🛠️ 正在初始化防偵測 Chrome 瀏覽器 (Undetected ChromeDriver)...")
     options = uc.ChromeOptions()
-    options.add_argument("--headless=new")  # 在 GitHub 雲端後台以無頭模式執行
+    options.add_argument("--headless=new")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--lang=zh-TW")
     
-    # 啟動防偵測瀏覽器，它會自動處理 Cloudflare 的 JS 檢測與特徵抹除
-    driver = uc.Chrome(options=options)
+    # 獲取當前主機的 Chrome 版本，並強制對齊 ChromeDriver 版本
+    chrome_version = get_chrome_major_version()
+    if chrome_version:
+        driver = uc.Chrome(options=options, version_main=chrome_version)
+    else:
+        driver = uc.Chrome(options=options)
+        
     return driver
 
 def check_eslite():
@@ -65,24 +85,20 @@ def check_eslite():
     try:
         driver.get(TARGET_URL)
         
-        # 1. 等待 Vue.js 渲染商品卡片 (針對 Cloudflare 可能的驗證稍微延長等待時間)
         print("⏳ 正在等待網頁與商品卡片載入 (同時通過 Cloudflare 背景檢測)...")
         wait = WebDriverWait(driver, 20)
         try:
             wait.until(EC.presence_of_element_located((By.CLASS_NAME, "product-item")))
         except TimeoutException:
             print("⚠️ 警告：20 秒內未找到商品卡片。可能是關鍵字無結果，或 Cloudflare 正在要求進一步驗證。")
-            # 印出當前網頁標題以供除錯
             print(f"📄 當前頁面標題：{driver.title}")
             return
 
-        # 2. 模擬真人向下捲動網頁，觸發圖片與懶加載
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
         time.sleep(1.5)
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(1.5)
 
-        # 3. 獲取頁面上所有的商品卡片
         product_items = driver.find_elements(By.CLASS_NAME, "product-item")
         print(f"📦 成功鎖定 {len(product_items)} 款商品，開始逐一分析庫存狀態...\n" + "-"*50)
 
@@ -103,7 +119,6 @@ def check_eslite():
                 except NoSuchElementException:
                     prod_price = "未知"
 
-                # 核心檢查：當前卡片內部是否有「加入購物車」按鈕
                 try:
                     buy_btn = item.find_element(By.CSS_SELECTOR, "button[data-gid='add-cart-button']")
                     status_text = buy_btn.text.strip()
@@ -121,8 +136,6 @@ def check_eslite():
                         status_text = notice_btn.text.strip()
                     except NoSuchElementException:
                         status_text = "暫無庫存/未開放"
-                    # 若想在終端機看到所有缺貨品項，可解除下一行的註解
-                    # print(f" 🔴 [{index:02d}] [缺貨中] {prod_name[:20]}... | 狀態: {status_text}")
                     pass
 
             except Exception as e:
@@ -140,7 +153,6 @@ def check_eslite():
     except Exception as e:
         print(f"❌ 執行過程中發生異常：{e}")
     finally:
-        # 確保安全關閉雲端瀏覽器，釋放記憶體
         driver.quit()
         print("👋 瀏覽器已安全釋放。")
 
