@@ -61,23 +61,25 @@ def get_chrome_major_version():
 def create_driver():
     print("🛠️ 正在初始化防偵測 Chrome 瀏覽器 (一般 GUI 模式)...")
     options = uc.ChromeOptions()
-
+    
     # ⚠️ 【關鍵修改】絕對不要加 --headless=new！讓 Chrome 在虛擬螢幕中以「真實 GUI 模式」開啟
     # 這樣才能擁有完整的 WebGL 與顯示器指紋，輕鬆欺騙 Cloudflare！
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-	@@ -72,14 +71,11 @@ def create_driver():
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--lang=zh-TW")
     options.add_argument("--password-store=basic")
     options.add_argument("--no-first-run")
-
+    
     chrome_version = get_chrome_major_version()
     if chrome_version:
         driver = uc.Chrome(options=options, version_main=chrome_version)
     else:
         driver = uc.Chrome(options=options)
-
+        
     return driver
+
 def check_eslite():
     # 1. 在雲端伺服器啟動 1920x1080 的虛擬桌面顯示器 (Xvfb)
     print("🖥️ 正在啟動 Linux 虛擬螢幕顯示器 (Xvfb)，準備偽裝為真實桌面...")
