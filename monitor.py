@@ -3,6 +3,7 @@ import time
 import subprocess
 import requests
 import undetected_chromedriver as uc
+from pyvirtualdisplay import Display  # 引入虛擬顯示器套件
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -27,7 +28,7 @@ def send_discord_notification(available_products):
                 {"name": "💰 價格", "value": f"${prod['price']}", "inline": True},
                 {"name": "🛒 按鈕狀態", "value": prod['status'], "inline": True}
             ],
-            "footer": {"text": "誠品防偵測瀏覽器監控系統 (GitHub Actions)"},
+            "footer": {"text": "誠品虛擬桌面監控系統 (GitHub Actions)"},
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         })
 
@@ -48,9 +49,7 @@ def send_discord_notification(available_products):
 def get_chrome_major_version():
     """自動偵測 GitHub Actions 主機上的 Google Chrome 主版號"""
     try:
-        # 透過系統指令查詢 Google Chrome 版本
         output = subprocess.check_output(['google-chrome', '--version'], text=True)
-        # 輸出範例: "Google Chrome 149.0.7827.0 ..." -> 擷取 "149"
         version_str = output.strip().split()[2]
         major_version = int(version_str.split('.')[0])
         print(f"ℹ️ 成功偵測到主機 Chrome 瀏覽器主版號為：{major_version}")
@@ -60,16 +59,19 @@ def get_chrome_major_version():
         return None
 
 def create_driver():
-    print("🛠️ 正在初始化防偵測 Chrome 瀏覽器 (Undetected ChromeDriver)...")
+    print("🛠️ 正在初始化防偵測 Chrome 瀏覽器 (一般 GUI 模式)...")
     options = uc.ChromeOptions()
-    options.add_argument("--headless=new")
+    
+    # ⚠️ 【關鍵修改】絕對不要加 --headless=new！讓 Chrome 在虛擬螢幕中以「真實 GUI 模式」開啟
+    # 這樣才能擁有完整的 WebGL 與顯示器指紋，輕鬆欺騙 Cloudflare！
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--lang=zh-TW")
+    options.add_argument("--password-store=basic")
+    options.add_argument("--no-first-run")
     
-    # 獲取當前主機的 Chrome 版本，並強制對齊 ChromeDriver 版本
     chrome_version = get_chrome_major_version()
     if chrome_version:
         driver = uc.Chrome(options=options, version_main=chrome_version)
@@ -79,82 +81,95 @@ def create_driver():
     return driver
 
 def check_eslite():
-    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 🌐 正在使用防偵測瀏覽器進入誠品線上...")
-    driver = create_driver()
-    
+    # 1. 在雲端伺服器啟動 1920x1080 的虛擬桌面顯示器 (Xvfb)
+    print("🖥️ 正在啟動 Linux 虛擬螢幕顯示器 (Xvfb)，準備偽裝為真實桌面...")
+    display = Display(visible=0, size=(1920, 1080))
+    display.start()
+
     try:
-        driver.get(TARGET_URL)
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 🌐 正在使用 GUI 模式進入誠品線上...")
+        driver = create_driver()
         
-        print("⏳ 正在等待網頁與商品卡片載入 (同時通過 Cloudflare 背景檢測)...")
-        wait = WebDriverWait(driver, 20)
         try:
-            wait.until(EC.presence_of_element_located((By.CLASS_NAME, "product-item")))
-        except TimeoutException:
-            print("⚠️ 警告：20 秒內未找到商品卡片。可能是關鍵字無結果，或 Cloudflare 正在要求進一步驗證。")
-            print(f"📄 當前頁面標題：{driver.title}")
-            return
-
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
-        time.sleep(1.5)
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(1.5)
-
-        product_items = driver.find_elements(By.CLASS_NAME, "product-item")
-        print(f"📦 成功鎖定 {len(product_items)} 款商品，開始逐一分析庫存狀態...\n" + "-"*50)
-
-        available_products = []
-        out_of_stock_count = 0
-
-        for index, item in enumerate(product_items, 1):
+            driver.get(TARGET_URL)
+            
+            # 給予 Cloudflare 稍微充足的時間進行背景 JS 靜默驗證
+            print("⏳ 正在等待網頁載入 (正在通過 Cloudflare 靜默指紋驗證)...")
+            wait = WebDriverWait(driver, 25)
             try:
-                name_elem = item.find_element(By.CLASS_NAME, "product-name")
-                prod_name = name_elem.text.strip()
-                
-                link_elem = item.find_element(By.CLASS_NAME, "item-image-link")
-                prod_url = link_elem.get_attribute("href")
+                wait.until(EC.presence_of_element_located((By.CLASS_NAME, "product-item")))
+                print("🎉 成功突破 Cloudflare 防線！網頁商品卡片已完全載入！")
+            except TimeoutException:
+                print("⚠️ 警告：25 秒內未找到商品卡片。")
+                print(f"📄 當前頁面標題：{driver.title}")
+                return
 
-                try:
-                    price_elem = item.find_element(By.CLASS_NAME, "slider-price")
-                    prod_price = price_elem.text.strip()
-                except NoSuchElementException:
-                    prod_price = "未知"
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
+            time.sleep(1.5)
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(1.5)
 
+            product_items = driver.find_elements(By.CLASS_NAME, "product-item")
+            print(f"📦 成功鎖定 {len(product_items)} 款商品，開始逐一分析庫存狀態...\n" + "-"*50)
+
+            available_products = []
+            out_of_stock_count = 0
+
+            for index, item in enumerate(product_items, 1):
                 try:
-                    buy_btn = item.find_element(By.CSS_SELECTOR, "button[data-gid='add-cart-button']")
-                    status_text = buy_btn.text.strip()
-                    print(f" 🟢 [{index:02d}] 【發現有貨！】 {prod_name} | 價格: ${prod_price}")
-                    available_products.append({
-                        "name": prod_name,
-                        "url": prod_url,
-                        "price": prod_price,
-                        "status": status_text
-                    })
-                except NoSuchElementException:
-                    out_of_stock_count += 1
+                    name_elem = item.find_element(By.CLASS_NAME, "product-name")
+                    prod_name = name_elem.text.strip()
+                    
+                    link_elem = item.find_element(By.CLASS_NAME, "item-image-link")
+                    prod_url = link_elem.get_attribute("href")
+
                     try:
-                        notice_btn = item.find_element(By.CSS_SELECTOR, "button[data-gid='notice-button']")
-                        status_text = notice_btn.text.strip()
+                        price_elem = item.find_element(By.CLASS_NAME, "slider-price")
+                        prod_price = price_elem.text.strip()
                     except NoSuchElementException:
-                        status_text = "暫無庫存/未開放"
-                    pass
+                        prod_price = "未知"
 
-            except Exception as e:
-                continue
+                    try:
+                        buy_btn = item.find_element(By.CSS_SELECTOR, "button[data-gid='add-cart-button']")
+                        status_text = buy_btn.text.strip()
+                        print(f" 🟢 [{index:02d}] 【發現有貨！】 {prod_name} | 價格: ${prod_price}")
+                        available_products.append({
+                            "name": prod_name,
+                            "url": prod_url,
+                            "price": prod_price,
+                            "status": status_text
+                        })
+                    except NoSuchElementException:
+                        out_of_stock_count += 1
+                        try:
+                            notice_btn = item.find_element(By.CSS_SELECTOR, "button[data-gid='notice-button']")
+                            status_text = notice_btn.text.strip()
+                        except NoSuchElementException:
+                            status_text = "暫無庫存/未開放"
+                        pass
 
-        print("-" * 50)
-        print(f"📊 巡邏完畢！🟢 可購買：{len(available_products)} 件 | 🔴 缺貨中：{out_of_stock_count} 件")
-        
-        if available_products:
-            print("🚀 正在觸發 Discord 警報...")
-            send_discord_notification(available_products)
-        else:
-            print("💤 目前所有款式皆未開放訂購。")
+                except Exception as e:
+                    continue
 
-    except Exception as e:
-        print(f"❌ 執行過程中發生異常：{e}")
+            print("-" * 50)
+            print(f"📊 巡邏完畢！🟢 可購買：{len(available_products)} 件 | 🔴 缺貨中：{out_of_stock_count} 件")
+            
+            if available_products:
+                print("🚀 正在觸發 Discord 警報...")
+                send_discord_notification(available_products)
+            else:
+                print("💤 目前所有款式皆未開放訂購。")
+
+        except Exception as e:
+            print(f"❌ 執行過程中發生異常：{e}")
+        finally:
+            driver.quit()
+            print("👋 Chrome 瀏覽器已安全關閉。")
+            
     finally:
-        driver.quit()
-        print("👋 瀏覽器已安全釋放。")
+        # 關閉虛擬顯示器
+        display.stop()
+        print("🖥️ 虛擬顯示器已停止。")
 
 if __name__ == "__main__":
     check_eslite()
