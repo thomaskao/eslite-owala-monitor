@@ -3,7 +3,7 @@ name: Eslite Owala Stock Monitor
 on:
   schedule:
     # 每 45 分鐘自動執行一次
-    - cron: '*/45 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch: # 允許在網頁上手動點擊執行
 
 jobs:
