@@ -17,6 +17,8 @@ TARGET_URL = "https://www.eslite.com/Search?keyword=owala+freesip+%E4%B8%8D%E9%8
 # 目標規格：三層不鏽鋼保溫杯 710ml (24oz) 與 945ml (32oz)，顏色不限
 CAPACITY_KEYWORDS = ("710", "24oz", "24 oz", "945", "32oz", "32 oz")
 EXCLUDE_KEYWORDS = ("tritan",)
+# 名稱必須含不鏽鋼字樣（兼容「不鏽鋼 / 不銹鋼 / stainless」寫法）
+MATERIAL_KEYWORDS = ("不鏽鋼", "不銹鋼", "stainless", "保溫", "保冰")
 
 FINDERS_URLS = [
     "https://www.finders.com.tw/products/owala-freesip-24oz",
@@ -30,7 +32,7 @@ FINDERS_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Appl
 
 def is_target_spec(name):
     low = name.lower()
-    return any(k in low for k in CAPACITY_KEYWORDS) and not any(k in low for k in EXCLUDE_KEYWORDS)
+    return any(k in low for k in CAPACITY_KEYWORDS) and any(k in low for k in MATERIAL_KEYWORDS) and not any(k in low for k in EXCLUDE_KEYWORDS)
 
 def send_discord_notification(available_products, source="誠品線上"):
     if not DISCORD_WEBHOOK_URL:
@@ -182,6 +184,7 @@ def check_eslite():
                     name_elem = item.find_element(By.CLASS_NAME, "product-name")
                     prod_name = name_elem.text.strip()
                     if not is_target_spec(prod_name):
+                        print(f" ⏭️ [{index:02d}] 規格不符，略過：{prod_name}")
                         continue
                     
                     link_elem = item.find_element(By.CLASS_NAME, "item-image-link")
