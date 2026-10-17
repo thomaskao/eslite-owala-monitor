@@ -28,6 +28,53 @@ FINDERS_SKU_FILTER = ("24oz", "32oz")
 FINDERS_SIZE_LABEL = {"24oz": "710ml", "32oz": "945ml"}
 FINDERS_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"}
 
+
+BUY_BUTTON_TEXTS = ("加入購物車", "立即購買", "立即結帳")
+
+# 不依賴 class 名稱：以 /product/ 商品連結找出每個商品卡片（含按鈕的最小容器）
+EXTRACT_JS = r"""
+const seen = new Set(), out = [];
+for (const a of document.querySelectorAll('a[href*="/product/"]')) {
+  const href = a.href.split('?')[0];
+  if (seen.has(href)) continue;
+  let card = a, best = null;
+  for (let i = 0; i < 8 && card.parentElement; i++) {
+    card = card.parentElement;
+    const links = new Set([...card.querySelectorAll('a[href*="/product/"]')].map(x => x.href.split('?')[0]));
+    if (links.size > 1) break;
+    best = card;
+  }
+  if (!best) continue;
+  seen.add(href);
+  const text = (best.innerText || '').trim();
+  const img = best.querySelector('img[alt]');
+  const nameEl = best.querySelector('[class*="name"], [class*="title"], h2, h3');
+  const name = ((nameEl && nameEl.innerText) || a.getAttribute('title') || (img && img.alt) || a.innerText || '').trim();
+  const priceM = text.match(/(?:NT)?\$\s*[\d,]+/);
+  out.push({
+    url: href, name, text,
+    price: priceM ? priceM[0] : '未知',
+    buttons: [...best.querySelectorAll('button')].map(b => ({
+      text: (b.innerText || '').trim(),
+      gid: b.getAttribute('data-gid') || '',
+      disabled: b.disabled || b.getAttribute('aria-disabled') === 'true',
+    })),
+  });
+}
+return out;
+"""
+
+DIAG_JS = r"""
+const cls = {};
+document.querySelectorAll('[class]').forEach(e => String(e.className).split(/\s+/).forEach(c => { if (c) cls[c] = (cls[c] || 0) + 1; }));
+return JSON.stringify({
+  anchors: document.querySelectorAll('a').length,
+  hrefs: [...document.querySelectorAll('a')].slice(0, 15).map(a => a.getAttribute('href')),
+  topClasses: Object.entries(cls).sort((a, b) => b[1] - a[1]).slice(0, 25),
+  text: (document.body.innerText || '').slice(0, 300),
+});
+"""
+
 def is_target_spec(name):
     low = name.lower()
     return any(k in low for k in CAPACITY_KEYWORDS) and any(k in low for k in MATERIAL_KEYWORDS) and not any(k in low for k in EXCLUDE_KEYWORDS)
@@ -162,70 +209,61 @@ def check_eslite():
         try:
             driver.get(TARGET_URL)
             
-            # 給予 Cloudflare 稍微充足的時間進行背景 JS 靜默驗證
-            print("⏳ 正在等待網頁載入 (正在通過 Cloudflare 靜默指紋驗證)...")
-            wait = WebDriverWait(driver, 25)
-            try:
-                wait.until(EC.presence_of_element_located((By.CLASS_NAME, "product-item")))
-                print("🎉 成功突破 Cloudflare 防線！網頁商品卡片已完全載入！")
-            except TimeoutException:
-                print("⚠️ 警告：25 秒內未找到商品卡片。")
+            # 給予 Cloudflare 與前端渲染充足的時間
+            print("⏳ 正在等待網頁載入 (通過 Cloudflare 驗證並渲染商品)...")
+            cards = []
+            deadline = time.time() + 40
+            while time.time() < deadline:
+                cards = driver.execute_script(EXTRACT_JS)
+                if cards:
+                    break
+                time.sleep(2)
+
+            if not cards:
+                print("⚠️ 警告：40 秒內未找到任何商品連結。")
                 print(f"📄 當前頁面標題：{driver.title}")
+                print("🔎 診斷資訊：", driver.execute_script(DIAG_JS))
                 return
 
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
-            time.sleep(1.5)
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1.5)
+            # 捲動以觸發延遲載入，再抓一次
+            for frac in (0.5, 1):
+                driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight * {frac});")
+                time.sleep(1.5)
+            cards = driver.execute_script(EXTRACT_JS) or cards
 
-            product_items = driver.find_elements(By.CLASS_NAME, "product-item")
-            print(f"📦 成功鎖定 {len(product_items)} 款商品，開始逐一分析庫存狀態...\n" + "-"*50)
+            print(f"📦 成功鎖定 {len(cards)} 款商品，開始逐一分析庫存狀態...\n" + "-"*50)
 
             available_products = []
             out_of_stock_count = 0
 
-            for index, item in enumerate(product_items, 1):
-                try:
-                    name_elem = item.find_element(By.CLASS_NAME, "product-name")
-                    prod_name = name_elem.text.strip()
-                    if not is_target_spec(prod_name):
-                        print(f" ⏭️ [{index:02d}] 規格不符，略過：{prod_name}")
-                        continue
-                    
-                    link_elem = item.find_element(By.CLASS_NAME, "item-image-link")
-                    prod_url = link_elem.get_attribute("href")
-
-                    try:
-                        price_elem = item.find_element(By.CLASS_NAME, "slider-price")
-                        prod_price = price_elem.text.strip()
-                    except NoSuchElementException:
-                        prod_price = "未知"
-
-                    try:
-                        buy_btn = item.find_element(By.CSS_SELECTOR, "button[data-gid='add-cart-button']")
-                        status_text = buy_btn.text.strip()
-                        print(f" 🟢 [{index:02d}] 【發現有貨！】 {prod_name} | 價格: ${prod_price}")
-                        available_products.append({
-                            "name": prod_name,
-                            "url": prod_url,
-                            "price": prod_price,
-                            "status": status_text
-                        })
-                    except NoSuchElementException:
-                        out_of_stock_count += 1
-                        try:
-                            notice_btn = item.find_element(By.CSS_SELECTOR, "button[data-gid='notice-button']")
-                            status_text = notice_btn.text.strip()
-                        except NoSuchElementException:
-                            status_text = "暫無庫存/未開放"
-                        pass
-
-                except Exception as e:
+            for index, card in enumerate(cards, 1):
+                text = card["text"]
+                name = card["name"] or text.split("\n")[0]
+                if not is_target_spec(text):
+                    print(f" ⏭️ [{index:02d}] 規格不符，略過：{name}")
                     continue
+
+                buttons = card["buttons"]
+                can_buy = any(
+                    (b["gid"] == "add-cart-button" or any(k in b["text"] for k in BUY_BUTTON_TEXTS))
+                    and not b["disabled"] for b in buttons
+                )
+                if can_buy:
+                    status = next((b["text"] for b in buttons if b["gid"] == "add-cart-button" or any(k in b["text"] for k in BUY_BUTTON_TEXTS)), "可購買")
+                    print(f" 🟢 [{index:02d}] 【發現有貨！】 {name} | 價格: {card['price']}")
+                    available_products.append({
+                        "name": name,
+                        "url": card["url"],
+                        "price": card["price"].replace("$", "").replace("NT", "").strip() or "未知",
+                        "status": status,
+                    })
+                else:
+                    out_of_stock_count += 1
+                    print(f" 🔴 [{index:02d}] 缺貨/未開放：{name} | 按鈕：{[b['text'] for b in buttons]}")
 
             print("-" * 50)
             print(f"📊 巡邏完畢！🟢 可購買：{len(available_products)} 件 | 🔴 缺貨中：{out_of_stock_count} 件")
-            
+
             if available_products:
                 print("🚀 正在觸發 Discord 警報...")
                 send_discord_notification(available_products)
