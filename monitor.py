@@ -15,16 +15,10 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 # 誠品監控網址從 GitHub Secrets 讀取，不寫在程式碼裡
 TARGET_URL = os.getenv("ESLITE_URL")
 
-# 目標規格：三層不鏽鋼保溫杯 710ml (24oz) 與 945ml (32oz)，顏色不限
-CAPACITY_KEYWORDS = ("710", "24oz", "24 oz", "945", "32oz", "32 oz")
-EXCLUDE_KEYWORDS = ("tritan",)
-# 名稱必須含不鏽鋼字樣（兼容「不鏽鋼 / 不銹鋼 / stainless」寫法）
-MATERIAL_KEYWORDS = ("不鏽鋼", "不銹鋼", "stainless", "保溫", "保冰")
-
 # Finders 商品頁網址從 GitHub Secrets 讀取（多個網址用逗號或換行分隔）
 FINDERS_URLS = [u.strip() for u in re.split(r"[,\s]+", os.getenv("FINDERS_URLS", "")) if u.strip()]
-# Finders 的 SKU 帶有容量，如 FreesipSS_24oz_Blue Steel；要 24oz (710ml) 與 32oz (945ml)
-FINDERS_SKU_FILTER = ("24oz", "32oz")
+# Finders 的 SKU 以 Freesip 開頭才是水壺（排除吸管、保護套等配件）；SKU 若帶容量則標示 710ml / 945ml
+FINDERS_SKU_PREFIX = "freesip"
 FINDERS_SIZE_LABEL = {"24oz": "710ml", "32oz": "945ml"}
 FINDERS_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"}
 
@@ -75,10 +69,6 @@ return JSON.stringify({
 });
 """
 
-def is_target_spec(name):
-    low = name.lower()
-    return any(k in low for k in CAPACITY_KEYWORDS) and any(k in low for k in MATERIAL_KEYWORDS) and not any(k in low for k in EXCLUDE_KEYWORDS)
-
 def send_discord_notification(available_products, source="誠品線上"):
     if not DISCORD_WEBHOOK_URL:
         print("⚠️ 未設定 DISCORD_WEBHOOK_URL，跳過推播。")
@@ -99,7 +89,7 @@ def send_discord_notification(available_products, source="誠品線上"):
         })
 
     payload = {
-        "content": f"🚨 **【補貨警報】** {source}偵測到 Owala 三層不鏽鋼保溫杯 (710/945ml) 有款式可購買啦！趕快檢查下方清單！",
+        "content": f"🚨 **【補貨警報】** {source}偵測到 Owala 水壺有款式可購買啦！趕快檢查下方清單！",
         "embeds": embeds
     }
 
@@ -133,30 +123,31 @@ def check_finders():
         for c in chunks:
             sku = re.match(B + r'"sku' + B + r'":' + B + r'"([^"' + B + r']*)', c).group(1)
             qty = re.search(B + r'"quantity' + B + r'":(-?\d+),' + B + r'"stock_id', c)
-            if not qty or not any(k in sku for k in FINDERS_SKU_FILTER):
+            if not qty or not sku.lower().startswith(FINDERS_SKU_PREFIX):
                 continue
             name = re.search(B + r'"fields' + B + r'":\[\{' + B + r'"name_translations' + B + r'":\{[^}]*\},' + B + r'"name' + B + r'":' + B + r'"([^"' + B + r']*)', c)
             price = re.search(B + r'"price_sale' + B + r'":\{[^}]*?' + B + r'"dollars' + B + r'":([\d.]+)', c)
             color = name.group(1) if name else sku
-            size = next(FINDERS_SIZE_LABEL[k] for k in FINDERS_SKU_FILTER if k in sku)
+            size = next((v for k, v in FINDERS_SIZE_LABEL.items() if k in sku), "")
+            kind = "Tritan" if "tritan" in sku.lower() else "不鏽鋼"
             total += 1
             if int(qty.group(1)) > 0:
                 in_stock += 1
                 available.append({
-                    "name": f"Owala FreeSip 不鏽鋼 {size}｜{color}",
+                    "name": f"Owala FreeSip {kind} {size}｜{color}".replace("  ", " "),
                     "url": url,
                     "price": f"{float(price.group(1)):,.0f}" if price else "未知",
                     "status": f"庫存 {qty.group(1)}",
                 })
                 print(f" 🟢 【Finders 有貨】{color} x{qty.group(1)} | {url}")
-        print(f"📊 Finders {url.rsplit('/', 1)[-1]}：710/945ml 共 {total} 款，有貨 {in_stock} 款")
+        print(f"📊 Finders {url.rsplit('/', 1)[-1]}：共 {total} 款，有貨 {in_stock} 款")
         if not chunks:
             print("⚠️ 未解析到任何款式，頁面結構可能已變動。")
 
     if available:
         send_discord_notification(available, source="Finders")
     else:
-        print("💤 Finders 目前 710/945ml 皆無貨。")
+        print("💤 Finders 目前皆無貨。")
 
 def get_chrome_major_version():
     """自動偵測 GitHub Actions 主機上的 Google Chrome 主版號"""
@@ -239,10 +230,6 @@ def check_eslite():
             for index, card in enumerate(cards, 1):
                 text = card["text"]
                 name = card["name"] or text.split("\n")[0]
-                if not is_target_spec(text):
-                    print(f" ⏭️ [{index:02d}] 規格不符，略過：{name}")
-                    continue
-
                 buttons = card["buttons"]
                 can_buy = any(
                     (b["gid"] == "add-cart-button" or any(k in b["text"] for k in BUY_BUTTON_TEXTS))
