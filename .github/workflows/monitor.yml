@@ -28,5 +28,6 @@ jobs:
     - name: 執行監控腳本
       env:
         DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        ESLITE_URL: ${{ secrets.ESLITE_URL }}
       run: |
         python monitor.py

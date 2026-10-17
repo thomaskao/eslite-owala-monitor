@@ -12,7 +12,8 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 # 從 GitHub Secrets 讀取 Discord Webhook URL
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-TARGET_URL = "https://www.eslite.com/Search?keyword=owala+freesip+%E4%B8%8D%E9%8F%BD%E9%8B%BC&final_price=0,&publishDate=0&sort=_weight_+desc&size=20&display=list&start=0&exp=c"
+# 誠品監控網址從 GitHub Secrets 讀取，不寫在程式碼裡
+TARGET_URL = os.getenv("ESLITE_URL")
 
 # 目標規格：三層不鏽鋼保溫杯 710ml (24oz) 與 945ml (32oz)，顏色不限
 CAPACITY_KEYWORDS = ("710", "24oz", "24 oz", "945", "32oz", "32 oz")
@@ -145,6 +146,10 @@ def create_driver():
     return driver
 
 def check_eslite():
+    if not TARGET_URL:
+        print("⚠️ 未設定 ESLITE_URL，跳過誠品檢查。")
+        return
+
     # 1. 在雲端伺服器啟動 1920x1080 的虛擬桌面顯示器 (Xvfb)
     print("🖥️ 正在啟動 Linux 虛擬螢幕顯示器 (Xvfb)，準備偽裝為真實桌面...")
     display = Display(visible=0, size=(1920, 1080))
