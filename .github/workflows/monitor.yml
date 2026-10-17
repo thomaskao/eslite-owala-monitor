@@ -29,5 +29,6 @@ jobs:
       env:
         DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         ESLITE_URL: ${{ secrets.ESLITE_URL }}
+        FINDERS_URLS: ${{ secrets.FINDERS_URLS }}
       run: |
         python monitor.py

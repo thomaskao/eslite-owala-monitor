@@ -21,11 +21,8 @@ EXCLUDE_KEYWORDS = ("tritan",)
 # 名稱必須含不鏽鋼字樣（兼容「不鏽鋼 / 不銹鋼 / stainless」寫法）
 MATERIAL_KEYWORDS = ("不鏽鋼", "不銹鋼", "stainless", "保溫", "保冰")
 
-FINDERS_URLS = [
-    "https://www.finders.com.tw/products/owala-freesip-24oz",
-    "https://www.finders.com.tw/products/owala-freesip-32oz",
-    "https://www.finders.com.tw/products/owala-fs-special",
-]
+# Finders 商品頁網址從 GitHub Secrets 讀取（多個網址用逗號或換行分隔）
+FINDERS_URLS = [u.strip() for u in re.split(r"[,\s]+", os.getenv("FINDERS_URLS", "")) if u.strip()]
 # Finders 的 SKU 帶有容量，如 FreesipSS_24oz_Blue Steel；要 24oz (710ml) 與 32oz (945ml)
 FINDERS_SKU_FILTER = ("24oz", "32oz")
 FINDERS_SIZE_LABEL = {"24oz": "710ml", "32oz": "945ml"}
@@ -71,6 +68,9 @@ def send_discord_notification(available_products, source="誠品線上"):
 def check_finders():
     """Finders (Shopline) 商品頁把各款式庫存以 JSON 內嵌在 HTML 中，直接用 requests 解析即可。"""
     B = r"\\"  # 頁面內的 JSON 被跳脫過，key 形如 \"sku\"
+    if not FINDERS_URLS:
+        print("⚠️ 未設定 FINDERS_URLS，跳過 Finders 檢查。")
+        return
     available = []
     for url in FINDERS_URLS:
         try:
